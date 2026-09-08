@@ -147,8 +147,8 @@ const SWATCH_IMAGES = {
 };
 
 const state = {
-  step: 'side', side: null, type: null, material: null, color: null, style: null,
-  widthFt: '', widthIn: '', lengthFt: '', lengthIn: '', activeZone: null,
+  step: 'side', side: null, type: null, material: null, color: null, style: null, specialRequestNote: '',
+  widthRaw: '', lengthRaw: '', activeZone: null,
   railCount: null, railCord1: '', railCord2: '',
   tubeCount: null, tubeCord1: '', tubeCord2: '',
   topperCoachCord: '', topperSlideCord: '',
@@ -218,9 +218,62 @@ function cordText(count, c1, c2, isGirrard) {
   if (c1 && c2 && c1 === c2) return `2 cords, both ${c1}`;
   return `2 cords: ${c1 || '?'} + ${c2 || '?'}`;
 }
-function dimStr(ft, inches) {
-  if (!ft && !inches) return '';
-  return `${ft || 0}'${inches || 0}"`;
+// 🔴 NEW: parses whatever a tech actually types — 8' 11", 8 feet 11 inches, 8'11, 107, 107",
+// even with simple fractions like 11 1/2" — down to one number of total inches, since that's
+// the single source of truth everything downstream (diagram, summary, the sheet) now uses.
+// A bare number with no unit at all is treated as inches, per how techs actually measure.
+function parseToInches(raw) {
+  if (!raw) return null;
+  let str = raw.trim().toLowerCase();
+  if (!str) return null;
+
+  function parseNum(token) {
+    token = (token || '').trim();
+    if (!token) return null;
+    let m = token.match(/^(\d+)\s+(\d+)\/(\d+)$/); // whole + fraction, e.g. "11 1/2"
+    if (m) return parseInt(m[1]) + parseInt(m[2]) / parseInt(m[3]);
+    m = token.match(/^(\d+)\/(\d+)$/); // bare fraction, e.g. "1/2"
+    if (m) return parseInt(m[1]) / parseInt(m[2]);
+    m = token.match(/^(\d+(?:\.\d+)?)$/); // plain number
+    if (m) return parseFloat(m[1]);
+    return null;
+  }
+
+  let feet = 0, inches = 0, foundAny = false;
+  const numToken = '(\\d+\\/\\d+|\\d+(?:\\.\\d+)?(?:\\s+\\d+\\/\\d+)?)';
+
+  const feetMatch = str.match(new RegExp(numToken + "\\s*(?:'|ft\\.?|feet|foot)"));
+  if (feetMatch) {
+    const val = parseNum(feetMatch[1]);
+    if (val !== null) { feet = val; foundAny = true; }
+    str = str.slice(feetMatch.index + feetMatch[0].length);
+  }
+
+  const inchMatch = str.match(new RegExp(numToken + '\\s*(?:"|in\\.?|inch(?:es)?)?'));
+  if (inchMatch) {
+    const val = parseNum(inchMatch[1]);
+    if (val !== null) { inches = val; foundAny = true; }
+  }
+
+  if (!foundAny) return null;
+  return Math.round((feet * 12 + inches) * 100) / 100;
+}
+
+// Formats a parsed inches value back into a friendly "8'11" (107")" style string for display
+// on the diagram and in the review summary — the tech sees both, but inches is what's stored.
+function inchesToFriendly(totalInches) {
+  if (totalInches === null || totalInches === undefined) return '';
+  const ft = Math.floor(totalInches / 12);
+  const inRemainder = Math.round((totalInches - ft * 12) * 100) / 100;
+  const inStr = Number.isInteger(inRemainder) ? inRemainder : inRemainder.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+  if (ft > 0) return `${ft}'${inStr}" (${totalInches}")`;
+  return `${totalInches}"`;
+}
+
+function dimStr(rawValue) {
+  const parsed = parseToInches(rawValue);
+  if (parsed === null) return '';
+  return inchesToFriendly(parsed);
 }
 function materialColorText() {
   if (!state.material && !state.color) return 'Fabric';
@@ -243,7 +296,7 @@ function awningDiagramSvg() {
   const mirror = s.side === 'Passenger';
   const leftLabel = mirror ? 'Back of coach' : 'Front of coach';
   const rightLabel = mirror ? 'Front of coach' : 'Back of coach';
-  const width = dimStr(s.widthFt, s.widthIn), length = dimStr(s.lengthFt, s.lengthIn);
+  const width = dimStr(s.widthRaw), length = dimStr(s.lengthRaw);
   const railText = cordText(s.railCount, s.railCord1, s.railCord2, isGirrard);
   const tubeText = cordText(s.tubeCount, s.tubeCord1, s.tubeCord2, isGirrard);
   const ledOnLeft = s.led && ((mirror && s.ledEdge === 'Back') || (!mirror && s.ledEdge === 'Front'));
@@ -329,7 +382,7 @@ function awningDiagramSvg() {
 
 function topperDiagramSvg() {
   const s = state;
-  const width = dimStr(s.widthFt, s.widthIn), length = dimStr(s.lengthFt, s.lengthIn);
+  const width = dimStr(s.widthRaw), length = dimStr(s.lengthRaw);
   return `<svg width="100%" viewBox="0 0 380 210" role="img"><title>Slide topper diagram</title><desc>Coach-side edge on top, slide-side edge on bottom</desc>
     <defs><marker id="arrow2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
     <line x1="60" y1="14" x2="320" y2="14" stroke="#b5541e" stroke-width="1" marker-start="url(#arrow2)" marker-end="url(#arrow2)"/>
@@ -349,7 +402,7 @@ function topperDiagramSvg() {
 function cordQuestion(id, label, countKey, cord1Key, cord2Key) {
   const s = state;
   const isGirrard = s.style === 'Girrard';
-  let body = `<h3>${label}</h3>`;
+  let body = `<h3>${label} *</h3>`;
   if (isGirrard) {
     body += `<p class="hint">Girrard/box style always has exactly 1 cord here.</p>${cordSelect(cord1Key, s[cord1Key])}`;
   } else {
@@ -361,14 +414,14 @@ function cordQuestion(id, label, countKey, cord1Key, cord2Key) {
 }
 function ledQuestion() {
   const s = state;
-  let body = `<h3>LEDs</h3><div class="pill-row">${pill('LEDs: yes', s.led === true, 'setLed(true)')}${pill('LEDs: no', s.led === false, 'setLed(false)')}</div>`;
-  if (s.led) body += `<label class="field-label">Which end does the wiring hem sew into?</label><div class="pill-row">${pill('Front of coach', s.ledEdge === 'Front', "setLedEdge('Front')")}${pill('Back of coach', s.ledEdge === 'Back', "setLedEdge('Back')")}</div>`;
+  let body = `<h3>LEDs *</h3><div class="pill-row">${pill('LEDs: yes', s.led === true, 'setLed(true)')}${pill('LEDs: no', s.led === false, 'setLed(false)')}</div>`;
+  if (s.led) body += `<label class="field-label">Which end does the wiring hem sew into? *</label><div class="pill-row">${pill('Front of coach', s.ledEdge === 'Front', "setLedEdge('Front')")}${pill('Back of coach', s.ledEdge === 'Back', "setLedEdge('Back')")}</div>`;
   return `<div id="q-led" class="card">${body}</div>`;
 }
 function flapQuestion() {
   const s = state;
   if (s.style === 'Girrard') return `<div id="q-flap" class="card"><h3>Flap</h3><p class="hint" style="margin:0;">Girrard/box style has no flap.</p></div>`;
-  return `<div id="q-flap" class="card"><h3>Flap over the tube</h3><div class="pill-row">${pill('Squared edge', s.flapEdge === 'Squared', "setFlapEdge('Squared')")}${pill('Scalloped edge', s.flapEdge === 'Scalloped', "setFlapEdge('Scalloped')")}</div></div>`;
+  return `<div id="q-flap" class="card"><h3>Flap over the tube *</h3><div class="pill-row">${pill('Squared edge', s.flapEdge === 'Squared', "setFlapEdge('Squared')")}${pill('Scalloped edge', s.flapEdge === 'Scalloped', "setFlapEdge('Scalloped')")}</div></div>`;
 }
 
 // 🔴 NEW: relocated here from the material step — this isn't for color matching, it's for the
@@ -388,15 +441,38 @@ function photoAndNotesCard() {
   </div>`;
 }
 
+// 🔴 NEW: cord fields need their own validity check since Girrard and Standard have different
+// shapes (Girrard is always exactly 1 cord, Standard needs a count picked first).
+function cordValid(count, cord1, cord2, isGirrard) {
+  if (isGirrard) return !!cord1;
+  if (!count) return false;
+  if (!cord1) return false;
+  if (count === 2 && !cord2) return false;
+  return true;
+}
+
 function canAdvance() {
   const s = state;
+  const isGirrard = s.style === 'Girrard';
   if (s.step === 'side') return !!s.side;
   if (s.step === 'type') return !!s.type;
   if (s.step === 'material') return !!s.material;
-  if (s.step === 'color') return !!s.color;
+  if (s.step === 'color') {
+    if (!s.color) return false;
+    if (s.color === 'Special (request)') return !!s.specialRequestNote.trim();
+    return true;
+  }
   if (s.step === 'style') return !!s.style;
-  if (s.step === 'dims') return s.widthFt !== '' && s.lengthFt !== '';
-  if (s.step === 'jobInfo') return !!s.techName && !!s.workOrder;
+  if (s.step === 'dims') return parseToInches(s.widthRaw) !== null && parseToInches(s.lengthRaw) !== null;
+  if (s.step === 'diagram') {
+    return cordValid(s.railCount, s.railCord1, s.railCord2, isGirrard)
+      && cordValid(s.tubeCount, s.tubeCord1, s.tubeCord2, isGirrard)
+      && s.led !== null
+      && (!s.led || !!s.ledEdge)
+      && (isGirrard || !!s.flapEdge);
+  }
+  if (s.step === 'topperReview') return !!s.topperCoachCord && !!s.topperSlideCord;
+  if (s.step === 'jobInfo') return !!s.techName && !!s.advisorName && !!s.advisorEmail && !!s.dealership;
   return true;
 }
 
@@ -406,32 +482,36 @@ function renderInner() {
   let body = s.step === 'done' ? '' : `<div class="step-count">Step ${stepIdx+1} of ${steps.length - 1}</div>`;
 
   if (s.step === 'side') {
-    body += `<h2>Which side of the coach?</h2><div class="pill-row">${pill('Driver side', s.side === 'Driver', "setField('side','Driver')")}${pill('Passenger side', s.side === 'Passenger', "setField('side','Passenger')")}</div>`;
+    body += `<h2>Which side of the coach? *</h2><div class="pill-row">${pill('Driver side', s.side === 'Driver', "setField('side','Driver')")}${pill('Passenger side', s.side === 'Passenger', "setField('side','Passenger')")}</div>`;
   } else if (s.step === 'type') {
-    body += `<h2>What do you need?</h2><div class="pill-row">${pill('Slide topper', s.type === 'Topper', "setField('type','Topper')")}${pill('Awning', s.type === 'Awning', "setField('type','Awning')")}</div>`;
+    body += `<h2>What do you need? *</h2><div class="pill-row">${pill('Slide topper', s.type === 'Topper', "setField('type','Topper')")}${pill('Awning', s.type === 'Awning', "setField('type','Awning')")}</div>`;
   } else if (s.step === 'material') {
-    body += `<h2>Material</h2><div class="pill-row">${pill('Vinyl', s.material === 'Vinyl', "setMaterial('Vinyl')")}${pill('Acrylic', s.material === 'Acrylic', "setMaterial('Acrylic')")}</div>`;
+    body += `<h2>Material *</h2><div class="pill-row">${pill('Vinyl', s.material === 'Vinyl', "setMaterial('Vinyl')")}${pill('Acrylic', s.material === 'Acrylic', "setMaterial('Acrylic')")}</div>`;
     body += `<p class="hint">Acrylic is the canvas-style material typically used on higher-end RVs. Vinyl is the standard material — straightforward, and works well for most jobs.</p>`;
   } else if (s.step === 'color') {
     const opts = s.type === 'Awning' && s.material === 'Vinyl' ? ['Black'] : COLORS[s.material];
-    body += `<h2>Color</h2>`;
+    body += `<h2>Color *</h2>`;
     body += `<div class="swatch-grid">${opts.map(c => swatchCard(c)).join('')}</div>`;
     if (s.type === 'Awning' && s.material === 'Vinyl') body += `<p class="hint">Vinyl awnings are only made in black.</p>`;
+    if (s.color === 'Special (request)') {
+      body += `<div class="card" style="margin-top:12px;">
+        <label class="field-label">What are you looking for? *</label>
+        <textarea rows="3" oninput="setFieldSilent('specialRequestNote', this.value)" placeholder="Describe the color or fabric you need" style="width:100%; padding:12px; border-radius:10px; border:1.5px solid var(--line-strong); font-size:15px; font-family:inherit; color:var(--ink); resize:vertical;">${s.specialRequestNote}</textarea>
+      </div>`;
+    }
   } else if (s.step === 'style') {
-    body += `<h2>Style</h2><div class="pill-row">${pill('Girrard box', s.style === 'Girrard', "setField('style','Girrard')")}${pill('Standard (Carefree/Lippert/Dometic)', s.style === 'Standard', "setField('style','Standard')")}</div>`;
+    body += `<h2>Style *</h2><div class="pill-row">${pill('Girrard box', s.style === 'Girrard', "setField('style','Girrard')")}${pill('Standard (Carefree/Lippert/Dometic)', s.style === 'Standard', "setField('style','Standard')")}</div>`;
     if (s.style === 'Girrard') body += `<p class="hint">Girrard: vertical seams only, no flap, always 1 cord at the rail and 1 at the tube.</p>`;
   } else if (s.step === 'dims') {
-    body += `<h2>Width</h2>
-      <div class="dim-row">
-        <input type="number" min="0" step="1" value="${s.widthFt}" oninput="setFieldSilent('widthFt', this.value)" placeholder="Feet"><span class="dim-unit">ft</span>
-        <input type="number" min="0" step="0.125" value="${s.widthIn}" oninput="setFieldSilent('widthIn', this.value)" placeholder="Inches"><span class="dim-unit">in</span>
-      </div>
-      <h2 style="margin-top:20px;">Length / projection</h2>
-      <div class="dim-row">
-        <input type="number" min="0" step="1" value="${s.lengthFt}" oninput="setFieldSilent('lengthFt', this.value)" placeholder="Feet"><span class="dim-unit">ft</span>
-        <input type="number" min="0" step="0.125" value="${s.lengthIn}" oninput="setFieldSilent('lengthIn', this.value)" placeholder="Inches"><span class="dim-unit">in</span>
-      </div>
-      <p class="hint">Inches can be fractional (e.g. 6.5 or 6.125 for 6 1/8").</p>`;
+    body += `<h2>Width *</h2>
+      <p class="hint">Double-check this one. Older fabric shrinks slightly over time, so measuring straight off the old material can come up an inch or two short. For the most accurate number, measure across the roller tube itself instead.</p>
+      <input type="text" value="${s.widthRaw}" oninput="setFieldSilent('widthRaw', this.value)" placeholder="e.g. 8' 11&quot;, 8 feet 11 inches, or 107" style="width:100%;">
+      <p class="hint" id="preview-widthRaw" style="min-height:18px;">${s.widthRaw ? (parseToInches(s.widthRaw) !== null ? '= ' + inchesToFriendly(parseToInches(s.widthRaw)) : "Couldn't read that measurement — try a format like 8'11\" or 107") : ''}</p>
+      <h2 style="margin-top:20px;">Length / projection *</h2>
+      <p class="hint">Measure the fabric only — don't include the flap. We add extra length for the flap on our end.</p>
+      <input type="text" value="${s.lengthRaw}" oninput="setFieldSilent('lengthRaw', this.value)" placeholder="e.g. 4' 2&quot;, 4 feet 2 inches, or 50" style="width:100%;">
+      <p class="hint" id="preview-lengthRaw" style="min-height:18px;">${s.lengthRaw ? (parseToInches(s.lengthRaw) !== null ? '= ' + inchesToFriendly(parseToInches(s.lengthRaw)) : "Couldn't read that measurement — try a format like 8'11\" or 107") : ''}</p>
+      <p class="hint">Type it however's easiest — feet and inches, just inches, or with a fraction like 11 1/2". We'll convert it to inches automatically.</p>`;
   } else if (s.step === 'diagram') {
     body += `<h2>Review</h2><p class="hint">${materialColorText()}. Every question is listed below — tap the diagram to jump to a specific one.</p>`;
     body += `<div class="review-layout">`;
@@ -448,26 +528,27 @@ function renderInner() {
     body += `<div class="review-layout">`;
     body += `<div class="diagram-col">${topperDiagramSvg()}</div>`;
     body += `<div class="questions-col">`;
-    body += `<div class="card"><h3>Coach-side edge cord size</h3>${cordSelect('topperCoachCord', s.topperCoachCord)}</div>`;
-    body += `<div class="card"><h3>Slide-side edge cord size</h3>${cordSelect('topperSlideCord', s.topperSlideCord)}</div>`;
+    body += `<div class="card"><h3>Coach-side edge cord size *</h3>${cordSelect('topperCoachCord', s.topperCoachCord)}</div>`;
+    body += `<div class="card"><h3>Slide-side edge cord size *</h3>${cordSelect('topperSlideCord', s.topperSlideCord)}</div>`;
     body += photoAndNotesCard();
     body += `</div></div>`;
   } else if (s.step === 'jobInfo') {
-    function field(labelText, key, val, placeholder, type) {
+    function field(labelText, key, val, placeholder, type, hint) {
       return `<div class="field-group">
         <input type="${type || 'text'}" value="${val}" oninput="setFieldSilent('${key}', this.value)" placeholder="${placeholder}">
         <label class="field-label" style="margin-top:6px;">${labelText}</label>
+        ${hint ? `<p class="hint" style="margin-top:2px;">${hint}</p>` : ''}
       </div>`;
     }
     body += `<h2>Job details</h2><p class="hint">Last step — just needs to say who this is for.</p>
       <div class="card">
         <div class="job-grid">
-          ${field('Your name (tech filling this out)', 'techName', s.techName, 'e.g. John Smith')}
+          ${field('Your name (tech filling this out) *', 'techName', s.techName, 'e.g. John Smith')}
           ${field('Your email (in case we have questions)', 'techEmail', s.techEmail, 'you@dealer.com', 'email')}
-          ${field('Service advisor name', 'advisorName', s.advisorName, 'e.g. Jane Doe')}
-          ${field('Service advisor email', 'advisorEmail', s.advisorEmail, 'advisor@dealer.com', 'email')}
+          ${field('Service advisor name *', 'advisorName', s.advisorName, 'e.g. Jane Doe')}
+          ${field('Service advisor email *', 'advisorEmail', s.advisorEmail, 'advisor@dealer.com', 'email')}
           ${field('PO / RO / work order number', 'workOrder', s.workOrder, 'e.g. WO-38213')}
-          ${field('Dealership', 'dealership', s.dealership, 'e.g. General RV')}
+          ${field('Dealership *', 'dealership', s.dealership, 'e.g. General RV', 'text', "Please include the location — we work with several dealerships that share the same name across different cities.")}
           ${field('Coach year', 'coachYear', s.coachYear, 'e.g. 2025')}
           ${field('Coach make', 'coachMake', s.coachMake, 'e.g. Forest River')}
           ${field('Coach model', 'coachModel', s.coachModel, 'e.g. Georgetown')}
@@ -524,8 +605,9 @@ function summaryRows() {
     ['Work order', s.workOrder], ['Dealership', s.dealership],
     ['Coach', [s.coachYear, s.coachMake, s.coachModel].filter(Boolean).join(' ')],
     ['Side of coach', s.side], ['Item', s.type], ['Material', s.material], ['Color', s.color],
-    ['Width', dimStr(s.widthFt, s.widthIn)], ['Length', dimStr(s.lengthFt, s.lengthIn)]
+    ['Width', dimStr(s.widthRaw)], ['Length', dimStr(s.lengthRaw)]
   ];
+  if (s.color === 'Special (request)') rows.push(['Special request details', s.specialRequestNote]);
   if (s.type === 'Awning') {
     rows.push(['Style', s.style]);
     rows.push(['Rail cord', cordText(s.railCount, s.railCord1, s.railCord2, isGirrard)]);
@@ -587,6 +669,18 @@ function setFieldSilent(k, v) {
   state[k] = v;
   const btn = document.getElementById('nextBtn');
   if (btn) btn.disabled = !canAdvance();
+  // 🔴 NEW: live preview of how the free-form measurement was actually understood, so the tech
+  // can catch a typo or ambiguous entry before moving on, without a full re-render on every
+  // keystroke (which would lose their place in the input).
+  if (k === 'widthRaw' || k === 'lengthRaw') {
+    const previewEl = document.getElementById('preview-' + k);
+    if (previewEl) {
+      const parsed = parseToInches(v);
+      if (v.trim() === '') previewEl.textContent = '';
+      else if (parsed === null) { previewEl.textContent = "Couldn't read that measurement — try a format like 8'11\" or 107"; previewEl.style.color = '#b3261e'; }
+      else { previewEl.textContent = '= ' + inchesToFriendly(parsed); previewEl.style.color = 'var(--ink-soft)'; }
+    }
+  }
 }
 function setCount(k, n) { state[k] = n; render(); }
 function setLedEdge(v) { state.ledEdge = v; render(); }
@@ -645,6 +739,11 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbxgTovhaPRshKzXbydS
 async function submitForm() {
   state.submitting = true; state.submitError = ''; render();
   state.diagramImage = await captureDiagramAsPng();
+  // 🔴 NEW: send the actual parsed inches values alongside the raw text the tech typed — the
+  // sheet stores the clean number (the whole point of this change), while the raw text sticks
+  // around too in case anything ever needs a sanity check against what was literally typed.
+  state.widthInches = parseToInches(state.widthRaw);
+  state.lengthInches = parseToInches(state.lengthRaw);
   try {
     // 🔴 FIX: Apps Script web app URLs redirect internally before returning their real
     // response — when a page on a different site (like this one, on GitHub Pages) hits that
