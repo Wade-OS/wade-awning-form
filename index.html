@@ -646,13 +646,19 @@ async function submitForm() {
   state.submitting = true; state.submitError = ''; render();
   state.diagramImage = await captureDiagramAsPng();
   try {
-    const res = await fetch(BACKEND_URL, {
+    // 🔴 FIX: Apps Script web app URLs redirect internally before returning their real
+    // response — when a page on a different site (like this one, on GitHub Pages) hits that
+    // redirect, the browser can block reading the response entirely, which is exactly what
+    // "Failed to fetch" was. Using mode:'no-cors' sends the request and lets Apps Script
+    // process it normally on the backend (save to the sheet, send the email, all of it) — the
+    // trade-off is this page can no longer read back whether it actually succeeded, only
+    // whether the browser managed to send it at all.
+    await fetch(BACKEND_URL, {
       method: 'POST',
+      mode: 'no-cors',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(state)
     });
-    const result = await res.json();
-    if (!result.success) throw new Error(result.error || 'Unknown error');
     state.submitting = false;
     state.submitted = true;
     state.step = 'done';
