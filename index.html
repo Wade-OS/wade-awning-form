@@ -710,14 +710,22 @@ function captureDiagramAsPng() {
       const vh = viewBoxMatch ? parseInt(viewBoxMatch[2]) : 320;
       const scale = 2; // render at 2x for a crisp image in the email, not a blurry one
 
-      // 🔴 FIX: awningDiagramSvg()/topperDiagramSvg() set width="100%" on the root <svg> — correct
-      // for the on-screen copy, which sits inside a sized container, but this capture builds an
-      // <img> purely in memory that's never attached to the page, so a percentage width has
-      // nothing to resolve against. That was silently failing to load (img.onerror firing, no
-      // diagram ever making it into the submission) instead of throwing anything visible. Only
-      // this off-screen copy gets a fixed pixel width — the SVG shown on the review screen is
-      // untouched and stays responsive.
-      const fixedSvgString = svgString.replace('width="100%"', `width="${vw}" height="${vh}"`);
+      // 🔴 FIX #1: awningDiagramSvg()/topperDiagramSvg() set width="100%" on the root <svg> —
+      // correct for the on-screen copy, which sits inside a sized container, but this capture
+      // builds an <img> purely in memory that's never attached to the page, so a percentage width
+      // has nothing to resolve against. Only this off-screen copy gets a fixed pixel width — the
+      // SVG shown on the review screen is untouched and stays responsive.
+      // 🔴 FIX #2 (the real culprit, confirmed via the console error this was added to catch):
+      // the root <svg> has no xmlns declaration. That's invisible on screen because the browser
+      // infers the SVG namespace automatically for markup written inline in an HTML page — but
+      // the instant this same string gets pulled out and loaded standalone as its own
+      // image/svg+xml document (exactly what happens here), it needs that namespace declared
+      // explicitly, or the image decoder rejects the whole thing outright. That's why the diagram
+      // always looked right on the review screen while silently never making it into a submission.
+      const fixedSvgString = svgString.replace(
+        'width="100%"',
+        `xmlns="http://www.w3.org/2000/svg" width="${vw}" height="${vh}"`
+      );
       const svgDataUrl = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(fixedSvgString)));
       const img = new Image();
       img.onload = () => {
