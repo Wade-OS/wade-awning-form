@@ -208,8 +208,18 @@ function swatchCard(colorName) {
     <div class="swatch-name">${colorName}</div>
   </button>`;
 }
+// 🔴 FIX: CORD_SIZES entries carry a literal inch mark ('1/4"', '3/16"', ...), but this was
+// dropping that value straight into an HTML attribute unescaped — <option value="1/4""> — and
+// the embedded " breaks the attribute right there, silently truncating the stored value down to
+// just "1/4" (browsers ignore the stray trailing quote rather than erroring). A bare "1/4" or
+// "3/16" is exactly the kind of value Google Sheets auto-reads as a calendar date once it lands
+// in the submission sheet — the inch mark was accidentally the only thing stopping that, and the
+// broken escaping was stripping it off before it could help. Escaping the value attribute (while
+// leaving the visible label exactly as it was) keeps the full "1/4"" — inch mark included —
+// intact all the way through to the sheet.
 function cordSelect(id, val) {
-  return `<select data-key="${id}" onchange="setField('${id}', this.value)"><option value="">Select cord size</option>${CORD_SIZES.map(c => `<option value="${c}">${c}</option>`).join('')}</select>`;
+  const escAttr = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  return `<select data-key="${id}" onchange="setField('${id}', this.value)"><option value="">Select cord size</option>${CORD_SIZES.map(c => `<option value="${escAttr(c)}"${c === val ? ' selected' : ''}>${c}</option>`).join('')}</select>`;
 }
 function cordText(count, c1, c2, isGirrard) {
   if (isGirrard) return c1 ? c1 : 'not set';
