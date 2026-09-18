@@ -132,6 +132,34 @@ window.onerror = function(message, source, lineno, colno, error) {
 const CORD_SIZES = ['3/16"', '5/32"', '1/4"', '7/32"'];
 const COLORS = { Vinyl: ['Grey', 'Black', 'White'],
   Acrylic: ['Linen', 'Linen tweed', 'Heather beige', 'Moonrock', 'Charcoal tweed', 'Black', 'Cadet Grey', 'Special (request)'] };
+
+// 🔴 NEW: dealership parts departments want a part number to put on their PO, even though every
+// piece is actually custom-made-to-order (real pricing always comes from the dimensions, worked
+// out after Wade RV reviews the submission — these 4 numbers never imply a fixed price). This is
+// a category code, not a SKU: one per Item × Material combination, nothing more granular than that.
+const PART_NUMBERS = {
+  'AA689': { type: 'Awning', material: 'Acrylic', label: 'Acrylic Awning' },
+  'AT789': { type: 'Topper', material: 'Acrylic', label: 'Acrylic Slide Topper' },
+  'VA889': { type: 'Awning', material: 'Vinyl',   label: 'Vinyl Awning' },
+  'VT989': { type: 'Topper', material: 'Vinyl',   label: 'Vinyl Slide Topper' }
+};
+// 🔴 Always derived live from type+material rather than stored as its own piece of state — that
+// way there's no way for a stored part number to go stale if someone changes their answer to the
+// Item or Material question after already picking (or being given) one.
+function derivePartNumber(type, material) {
+  const code = Object.keys(PART_NUMBERS).find(k => PART_NUMBERS[k].type === type && PART_NUMBERS[k].material === material);
+  return code || '';
+}
+// 🔴 Lets a tech who already has a part number from the dealer's PO skip straight to the right
+// item + material, instead of having to know which pill combination it maps to.
+function applyPartNumber(code) {
+  const def = PART_NUMBERS[code];
+  if (!def) return;
+  state.type = def.type;
+  state.material = def.material;
+  state.color = null; // material may have just changed — don't carry over a color that no longer applies
+  render();
+}
 const SX = -18, SY = 130;
 
 const SWATCH_IMAGES = {
@@ -495,6 +523,11 @@ function renderInner() {
   if (s.step === 'side') {
     body += `<h2>Which side of the coach? *</h2><div class="pill-row">${pill('Driver side', s.side === 'Driver', "setField('side','Driver')")}${pill('Passenger side', s.side === 'Passenger', "setField('side','Passenger')")}</div>`;
   } else if (s.step === 'type') {
+    body += `<div class="card" style="margin-bottom:16px; background:#f4f1ec;">
+      <label class="field-label">Already have a part number from your PO?</label>
+      <div class="pill-row">${Object.keys(PART_NUMBERS).map(code => pill(code, derivePartNumber(s.type, s.material) === code, `applyPartNumber('${code}')`)).join('')}</div>
+      <p class="hint" style="margin-top:6px;">Picking one fills in the item and material below for you — double-check it, then keep going as usual.</p>
+    </div>`;
     body += `<h2>What do you need? *</h2><div class="pill-row">${pill('Slide topper', s.type === 'Topper', "setField('type','Topper')")}${pill('Awning', s.type === 'Awning', "setField('type','Awning')")}</div>`;
   } else if (s.step === 'material') {
     body += `<h2>Material *</h2><div class="pill-row">${pill('Vinyl', s.material === 'Vinyl', "setMaterial('Vinyl')")}${pill('Acrylic', s.material === 'Acrylic', "setMaterial('Acrylic')")}</div>`;
@@ -611,6 +644,14 @@ function render() {
 function summaryRows() {
   const s = state;
   const isGirrard = s.style === 'Girrard';
+  // 🔴 Called out separately from the rest of the summary rows (its own styled box, not just
+  // another line in the table) so it's unmistakably clear this is THE part number to hand to the
+  // dealer's parts department — not just one more field in a long list.
+  const partNum = derivePartNumber(s.type, s.material);
+  const partNumBlock = partNum ? `<div style="background:#eef6ec; border:2px solid #8fbf8a; border-radius:10px; padding:12px 14px; margin-bottom:14px;">
+    <div style="font-weight:800; font-size:16px; color:#2e5e2a;">Part #: ${partNum}</div>
+    <div style="font-size:13px; color:#4a7a45; margin-top:2px;">Give this to your parts department when ordering.</div>
+  </div>` : '';
   const rows = [
     ['Tech', s.techName], ['Tech email', s.techEmail], ['Service advisor', s.advisorName], ['Advisor email', s.advisorEmail],
     ['Work order', s.workOrder], ['Dealership', s.dealership],
@@ -630,7 +671,7 @@ function summaryRows() {
     rows.push(['Slide-side cord', s.topperSlideCord || 'not set']);
   }
   rows.push(['Notes', s.notes || '']);
-  let html = `<div class="final-summary">${rows.map(r => `<div class="row"><span>${r[0]}</span><span>${r[1] || '—'}</span></div>`).join('')}</div>`;
+  let html = partNumBlock + `<div class="final-summary">${rows.map(r => `<div class="row"><span>${r[0]}</span><span>${r[1] || '—'}</span></div>`).join('')}</div>`;
   if (s.photoData) html += `<div style="margin-top:14px;"><p class="hint" style="margin-bottom:6px;">Photo of existing awning/topper:</p><img src="${s.photoData}" style="max-width:100%; border-radius:8px;"></div>`;
   return html;
 }
@@ -774,6 +815,9 @@ async function submitForm() {
   // around too in case anything ever needs a sanity check against what was literally typed.
   state.widthInches = parseToInches(state.widthRaw);
   state.lengthInches = parseToInches(state.lengthRaw);
+  // 🔴 NEW: computed fresh right before sending, same as widthInches/lengthInches above — always
+  // in sync with whatever Item/Material the tech actually ended up with, however they got there.
+  state.partNumber = derivePartNumber(state.type, state.material);
   try {
     // 🔴 FIX: Apps Script web app URLs redirect internally before returning their real
     // response — when a page on a different site (like this one, on GitHub Pages) hits that
