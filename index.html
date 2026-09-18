@@ -710,7 +710,15 @@ function captureDiagramAsPng() {
       const vh = viewBoxMatch ? parseInt(viewBoxMatch[2]) : 320;
       const scale = 2; // render at 2x for a crisp image in the email, not a blurry one
 
-      const svgDataUrl = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgString)));
+      // 🔴 FIX: awningDiagramSvg()/topperDiagramSvg() set width="100%" on the root <svg> — correct
+      // for the on-screen copy, which sits inside a sized container, but this capture builds an
+      // <img> purely in memory that's never attached to the page, so a percentage width has
+      // nothing to resolve against. That was silently failing to load (img.onerror firing, no
+      // diagram ever making it into the submission) instead of throwing anything visible. Only
+      // this off-screen copy gets a fixed pixel width — the SVG shown on the review screen is
+      // untouched and stays responsive.
+      const fixedSvgString = svgString.replace('width="100%"', `width="${vw}" height="${vh}"`);
+      const svgDataUrl = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(fixedSvgString)));
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
@@ -721,9 +729,12 @@ function captureDiagramAsPng() {
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         resolve(canvas.toDataURL('image/png'));
       };
-      img.onerror = () => resolve(null); // don't block submission over a diagram-capture hiccup
+      // 🔴 Logged instead of only silently resolving null — don't block submission over a
+      // diagram-capture hiccup, but leave a trail in the browser console if it ever happens again.
+      img.onerror = (err) => { console.error('Diagram capture failed to load as an image:', err); resolve(null); };
       img.src = svgDataUrl;
     } catch (e) {
+      console.error('Diagram capture threw:', e);
       resolve(null);
     }
   });
